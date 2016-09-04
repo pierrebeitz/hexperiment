@@ -2,4 +2,49 @@ $icon-font-path: '~bootstrap-sass/assets/fonts/bootstrap/';
 @import '~bootstrap-sass/assets/stylesheets/bootstrap/_mixins.scss';
 @import '~bootstrap-sass/assets/stylesheets/_bootstrap.scss';
 
-// can add Boostrap overrides, additional Sass/CSS below...
+$w: 50px;
+//sqrt(3) = 1.73205080757
+$h: $w / 1.73205080757;
+
+@mixin coloredHex($color) {
+  background-color: $color;
+  &:before { border-bottom-color: $color; }
+  &:after  { border-top-color:    $color; }
+}
+
+body {
+  background-color: #23201b;
+}
+
+.hexagon {
+  position: relative;
+  width: $w;
+  height: $h;
+  margin: $h/2;
+
+  &:before, &:after {
+    content: "";
+    position: absolute;
+    width: 0;
+    border-left: $w/2 solid transparent;
+    border-right: $w/2 solid transparent;
+  }
+
+  &:before {
+    bottom: 100%;
+    border-bottom: $h/2 solid;
+  }
+
+  &:after {
+    top: 100%;
+    width: 0;
+    left: 0;
+    border-top: $h/2 solid;
+  }
+
+  $color: #00a7e7;
+  @include coloredHex($color);
+  &.active { @include coloredHex(darken($color, 20)); }
+  &.hover  { @include coloredHex(darken($color, 10)); }
+}
+
