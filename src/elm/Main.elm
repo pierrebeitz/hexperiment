@@ -30,7 +30,7 @@ subscriptions : a -> Sub Msg
 subscriptions model =
     Sub.batch
         [ every (33 * millisecond) Tick
-        , every second UpgradeHexes
+        , every (33 * millisecond) UpgradeHexes
         ]
 
 
@@ -160,7 +160,7 @@ update msg model =
         UpgradeHexes _ ->
             let
                 incrHex h =
-                    h.value * 1.05 |> min 100
+                    h.value * 1.002 |> min 100
 
                 mapMap i e =
                     { hex = e.hex, value = incrHex e }
