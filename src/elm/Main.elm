@@ -1,15 +1,16 @@
 module Main exposing (..)
 
-import Config exposing (config)
-import Dict
+import Dict exposing (Dict)
 import Hexagons.Hex as Hex exposing (Hex, (===), (!==))
 import Hexagons.Map as Map
-import Hexagons.Layout as Layout
+import Hexagons.Layout as Layout exposing (drawLine)
 import Html exposing (..)
 import Html.App as Html
 import Html.Attributes exposing (class, style)
 import Html.Events exposing (onMouseOver, onMouseOut, onClick)
 import Guards exposing (..)
+import Math.Vector2 as Vec exposing (Vec2, vec2)
+import Time exposing (every, second, millisecond, Time)
 
 
 -- APP
@@ -17,39 +18,65 @@ import Guards exposing (..)
 
 main : Program Never
 main =
-    Html.beginnerProgram { model = model, view = view, update = update }
+    Html.program
+        { init = init
+        , view = view
+        , update = update
+        , subscriptions = subscriptions
+        }
 
 
-
--- MODEL
---type alias Hex =
---( Hexagons.Hex.Hex, Int )
+subscriptions : a -> Sub Msg
+subscriptions model =
+    Sub.batch
+        [ every (33 * millisecond) Tick
+        , every second UpgradeHexes
+        ]
 
 
 type alias Model =
-    { map : Dict.Dict Map.Hash Hex.Hex
+    { map : Dict Map.Hash Hex
     , layout : Layout.Layout
     , hoverHex : Maybe Hex.Hex
     , activeHex : Maybe Hex.Hex
+    , ship : Ship
+    , score : Float
     }
 
 
-model : Model
-model =
-    { map = Map.rectangularPointyTopMap config.fieldSize.x config.fieldSize.y
+type alias Hex =
+    { value : Float
+    , hex : Hex.Hex
+    }
+
+
+type alias Ship =
+    { acceleration : Float
+    , pos : Vec2
+    , velocity : Vec2
+    }
+
+
+init : ( Model, Cmd Msg )
+init =
+    { map =
+        Map.rectangularPointyTopMap 15 15
+            |> Dict.map (\i e -> { hex = e, value = 100 })
     , layout =
-        { orientation =
-            Layout.orientationLayoutPointy
-            --{ forward_matrix = ( 2 / sqrt 3.0, 1 / (sqrt 3), 0.0, 1.0 )
-            --, inverse_matrix = ( (sqrt 3.0) / 3.0, -1.0 / 3.0, 0.0, 2.0 / 3.0 )
-            --, start_angle = 0.5
-            --}
-        , size = ( 30.0, 30.0 )
-        , origin = ( 0.0, 0.0 )
+        { orientation = Layout.orientationLayoutPointy
+        , size = ( 30, 30 )
+        , origin = ( 0, 0 )
         }
     , hoverHex = Nothing
     , activeHex = Nothing
+    , score = 0
+    , ship =
+        { pos = vec2 30 15
+        , velocity = vec2 0 0
+        , acceleration = 1.001
+        }
     }
+        ! []
 
 
 
@@ -57,71 +84,94 @@ model =
 
 
 type Msg
-    = SetActive (Maybe Hex.Hex)
+    = SetActive Hex.Hex
     | SetHover (Maybe Hex.Hex)
+    | Tick Time
+    | UpgradeHexes Time
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         SetActive hex ->
-            { model | activeHex = hex }
+            let
+                shipOnTile =
+                    Hex.eq hex <|
+                        Layout.pointToHex model.layout (Vec.toTuple model.ship.pos)
+
+                map i tile =
+                    if Hex.distance hex tile.hex <= 1 && shipOnTile then
+                        { tile | value = tile.value - 20 }
+                    else
+                        tile
+
+                score idx tile int =
+                    if Hex.distance hex tile.hex <= 1 && shipOnTile then
+                        int + min tile.value 20
+                    else
+                        int
+            in
+                { model
+                    | activeHex = Just hex
+                    , map = Dict.map map model.map
+                    , score = Dict.foldl score model.score model.map
+                }
+                    ! []
 
         SetHover hex ->
-            { model | hoverHex = hex }
+            { model | hoverHex = hex } ! []
 
+        Tick _ ->
+            let
+                vDist =
+                    model.activeHex
+                        |> Maybe.map (Layout.hexToPoint model.layout)
+                        |> Maybe.map Vec.fromTuple
+                        |> Maybe.withDefault (vec2 0 0)
+                        |> (\h -> Vec.sub h model.ship.pos)
 
-{-| Linear interpolation of hexes
--}
-hexLerp : Hex -> Hex -> Float -> Hex
-hexLerp a b t =
-    let
-        a_ =
-            Hex.toFloatHex a
+                v1 =
+                    vDist
+                        |> Vec.normalize
+                        |> Vec.scale model.ship.acceleration
+                        |> Vec.add model.ship.velocity
+                        |> dampWhenApproachingDestination
+                        |> capVelocity
 
-        b_ =
-            Hex.toFloatHex b
+                capVelocity v =
+                    Vec.normalize v |> Vec.scale (Vec.length v |> min 10)
 
-        q1 =
-            Hex.q a_
+                dampWhenApproachingDestination v =
+                    if 5 * Vec.length v > Vec.length vDist then
+                        Vec.scale 0.2 v
+                    else
+                        v
 
-        q2 =
-            Hex.q b_
+                ship' ship =
+                    { ship
+                        | velocity = v1
+                        , pos = Vec.add v1 model.ship.pos
+                    }
+            in
+                ( model |> (\m -> { m | ship = ship' m.ship })
+                , Cmd.none
+                )
 
-        r1 =
-            Hex.r a_
+        UpgradeHexes _ ->
+            let
+                incrHex h =
+                    h.value * 1.05 |> min 100
 
-        r2 =
-            Hex.r b_
-
-        q =
-            q1 + ((q2 - q1) * t)
-
-        r =
-            r1 + ((r2 - r1) * t)
-    in
-        Hex.floatFactory ( q, r )
-
-
-drawLine : Hex -> Hex -> List Hex
-drawLine a b =
-    let
-        n =
-            toFloat <| Hex.distance a b
-
-        step =
-            1.0 / (max n 1.0)
-
-        steps =
-            List.map ((*) step) [0.0..n]
-    in
-        List.map (Hex.toIntHex << (hexLerp a b)) steps
+                mapMap i e =
+                    { hex = e.hex, value = incrHex e }
+            in
+                { model | map = Dict.map mapMap model.map } ! []
 
 
 view : Model -> Html Msg
 view model =
     let
-        hexagon ( hash, hex ) =
+        hexagon ( hash, { hex, value } ) =
             let
                 ( x, y ) =
                     Layout.hexToPoint model.layout hex
@@ -129,32 +179,42 @@ view model =
                 isHex =
                     Maybe.map ((===) hex) >> Maybe.withDefault False
 
-                inLine h =
-                    Maybe.map2 drawLine model.activeHex model.hoverHex
-                        |> Maybe.withDefault []
-                        |> List.member h
-
                 klass =
                     "hexagon "
-                        ++ (inLine hex => "active " |= "")
                         ++ (isHex model.activeHex => "active " |= "")
                         ++ (isHex model.hoverHex => "hover " |= "")
+                        ++ (model.hoverHex
+                                |> Maybe.map (\h -> Hex.distance hex h == 1 => "hover " |= "")
+                                |> Maybe.withDefault ""
+                           )
             in
                 div
                     [ class klass
-                    , onClick (SetActive <| Just hex)
+                    , onClick (SetActive <| hex)
                     , onMouseOver (SetHover <| Just hex)
                     , onMouseOut (SetHover Nothing)
                     , style
                         [ ( "position", "absolute" )
                         , ( "left", toString x ++ "px" )
                         , ( "top", toString y ++ "px" )
+                        , ( "opacity", toString (value / 100) )
                         ]
                     ]
-                    --[ text <| toString hash ]
                     []
     in
-        model.map
-            |> Dict.toList
-            |> List.map hexagon
-            |> div []
+        div []
+            [ model.map
+                |> Dict.toList
+                |> List.map hexagon
+                |> div []
+            , let
+                ( x, y ) =
+                    Vec.toTuple model.ship.pos
+              in
+                div
+                    [ class "ship"
+                    , style
+                        [ ( "transform", "translate3d(" ++ toString x ++ "px, " ++ toString y ++ "px, 0)" ) ]
+                    ]
+                    [ text <| toString model.score ]
+            ]
